@@ -1,0 +1,23 @@
+[package]
+name = "vp2pn"
+description = "A peer-to-peer VPN over libp2p QUIC"
+version = "0.1.0"
+edition = "2024"
+authors = ["Boris Astardzhiev <boris.astardzhiev@gmail.com>"]
+license = "MIT"
+keywords = ["vpn", "libp2p", "p2p", "tun", "quic"]
+categories = ["network-programming"]
+repository = "https://github.com/procdump/vp2pn"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+libp2p-request-response = "0.29.0"
+libp2p = { version = "0.56.0", features = [ "tokio", "quic", "ping" ] }
+libp2p-swarm-derive = "0.35.1"
+tokio = { version = "1.53.1", features = ["full"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tun-rs = { version = "2.8.8", features = ["async"] }
+async-trait = "0.1.92"
+ipnet = "2.12.1"
+tracing = "0.1.44"
