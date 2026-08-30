@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use ipnet::Ipv4Net;
 use libp2p::Multiaddr;
 
-use crate::consts::{DEFAULT_LISTEN_PORT, DEFAULT_MTU};
+use crate::consts::{DEFAULT_LISTEN_MULTIADDR, DEFAULT_MTU};
 
 #[derive(Parser, Debug)]
 pub struct CommandLineParams {
@@ -22,8 +22,11 @@ pub struct CommandLineParams {
 pub enum Mode {
     /// Listen for incoming peers
     Server {
-        #[arg(short, long, default_value_t = DEFAULT_LISTEN_PORT)]
-        port: u16,
+        /// Where to listen. Either a direct address
+        /// (/ip4/0.0.0.0/udp/9090/quic-v1) or a relay circuit
+        /// (/ip4/<relay>/udp/4001/quic-v1/p2p/<RELAY_ID>/p2p-circuit).
+        #[arg(short, long, default_value = DEFAULT_LISTEN_MULTIADDR)]
+        listen_multiaddr: Multiaddr,
     },
     /// Dial a server
     Client {

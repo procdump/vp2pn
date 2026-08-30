@@ -13,7 +13,7 @@ repository = "https://github.com/procdump/vp2pn"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 libp2p-request-response = "0.29.0"
-libp2p = { version = "0.56.0", features = [ "tokio", "quic", "ping" ] }
+libp2p = { version = "0.56.0", features = [ "tokio", "quic", "ping", "relay", "noise", "yamux" ] }
 libp2p-swarm-derive = "0.35.1"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

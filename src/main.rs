@@ -1,9 +1,10 @@
 use anyhow::Result;
 use libp2p::connection_limits::{self, ConnectionLimits};
 use libp2p::{futures::StreamExt, identity::Keypair, multiaddr::Protocol, swarm::SwarmEvent};
+use libp2p::{noise, relay, yamux};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use vp2pn::behaviour::{BytesCodec, Vp2pnBehaviour, Vp2pnBehaviourEvent};
@@ -26,11 +27,21 @@ async fn main() -> Result<()> {
     let keypair = Keypair::generate_ed25519();
     let tun = Arc::new(TunDev::new(config.params.tun_prefix, config.params.mtu)?);
 
-    let limits = match config.params.mode {
+    let limits = match &config.params.mode {
         Mode::Server { .. } => ConnectionLimits::default()
             .with_max_established_incoming(Some(1))
             .with_max_pending_incoming(Some(1)),
-        Mode::Client { .. } => ConnectionLimits::default().with_max_established_outgoing(Some(1)),
+        Mode::Client { target } => {
+            // Reaching the server over a circuit costs an extra connection: one
+            // to the relay, plus the relayed one. `ConnectionLimits` counts a
+            // relayed connection the same as a direct one.
+            let via_relay = target.iter().any(|p| matches!(p, Protocol::P2pCircuit));
+            ConnectionLimits::default().with_max_established_outgoing(Some(if via_relay {
+                2
+            } else {
+                1
+            }))
+        }
     };
 
     // Starting with req_res for the test but better be no responses.
@@ -46,7 +57,9 @@ async fn main() -> Result<()> {
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
-        .with_behaviour(|_| Vp2pnBehaviour {
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
+        .with_behaviour(|_key, relay_client| Vp2pnBehaviour {
+            relay_client,
             request_response,
             ping: libp2p::ping::Behaviour::default(),
             limits: connection_limits::Behaviour::new(limits),
@@ -55,8 +68,7 @@ async fn main() -> Result<()> {
         .build();
 
     match config.params.mode {
-        vp2pn::config::Mode::Server { port } => {
-            let listen_multiaddr = format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse()?;
+        vp2pn::config::Mode::Server { listen_multiaddr } => {
             info!(target: "vp2pn::swarm", %listen_multiaddr, "listening on");
             swarm.listen_on(listen_multiaddr)?;
         }
@@ -90,8 +102,24 @@ async fn main() -> Result<()> {
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        let dial_addr = address.with(Protocol::P2p(*swarm.local_peer_id()));
+                        // A circuit address already ends with `/p2p/<self>`; a
+                        // direct one ends at the transport and needs it added.
+                        let dial_addr = match address.iter().last() {
+                            Some(Protocol::P2p(_)) => address,
+                            _ => address.with(Protocol::P2p(*swarm.local_peer_id())),
+                        };
                         info!(target: "vp2pn::swarm", %dial_addr, "listening on");
+                    },
+                    SwarmEvent::Behaviour(Vp2pnBehaviourEvent::RelayClient(
+                        relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, limit },
+                    )) => {
+                        info!(
+                            target: "vp2pn::swarm",
+                            %relay_peer_id,
+                            %renewal,
+                            ?limit,
+                            "relay reservation accepted"
+                        );
                     },
                     SwarmEvent::Behaviour(Vp2pnBehaviourEvent::RequestResponse(
                         libp2p_request_response::Event::Message { message, .. },
@@ -120,6 +148,12 @@ async fn main() -> Result<()> {
                         info!(target: "vp2pn::swarm", %peer_id, "connection closed");
                         remote_peer_id = None;
                     }
+                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                        error!(target: "vp2pn::swarm", ?peer_id, %error, "outgoing connection failed");
+                    }
+                    SwarmEvent::IncomingConnectionError { error, .. } => {
+                        error!(target: "vp2pn::swarm", %error, "incoming connection failed");
+                    }
                     _ => {}
                 }
             }
@@ -131,6 +165,8 @@ async fn main() -> Result<()> {
 
     drop(tun_writer);
     join_tun_writer.await?;
+
+    info!(target: "vp2pn::swarm", "exiting");
 
     Ok(())
 }

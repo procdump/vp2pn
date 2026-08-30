@@ -97,6 +97,7 @@ impl Codec for BytesCodec {
 
 #[derive(NetworkBehaviour)]
 pub struct Vp2pnBehaviour {
+    pub relay_client: libp2p::relay::client::Behaviour,
     pub request_response: libp2p_request_response::Behaviour<BytesCodec>,
     pub ping: libp2p::ping::Behaviour,
     pub limits: connection_limits::Behaviour,
