@@ -1,13 +1,15 @@
 use anyhow::Result;
 use libp2p::connection_limits::{self, ConnectionLimits};
 use libp2p::{futures::StreamExt, identity::Keypair, multiaddr::Protocol, swarm::SwarmEvent};
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use vp2pn::behaviour::{BytesCodec, Vp2pnBehaviour, Vp2pnBehaviourEvent};
 use vp2pn::config::{Config, Mode};
-use vp2pn::tun::TunDev;
+use vp2pn::consts::MAX_CHANNEL_BOUND;
+use vp2pn::tun::{TunDev, TunReader, TunWriter};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,7 +24,7 @@ async fn main() -> Result<()> {
         .try_init();
 
     let keypair = Keypair::generate_ed25519();
-    let tun = TunDev::new(config.params.tun_prefix, config.params.mtu)?;
+    let tun = Arc::new(TunDev::new(config.params.tun_prefix, config.params.mtu)?);
 
     let limits = match config.params.mode {
         Mode::Server { .. } => ConnectionLimits::default()
@@ -55,31 +57,33 @@ async fn main() -> Result<()> {
     match config.params.mode {
         vp2pn::config::Mode::Server { port } => {
             let listen_multiaddr = format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse()?;
-            info!(target: "vp2pn::tun", %listen_multiaddr, "listening on");
+            info!(target: "vp2pn::swarm", %listen_multiaddr, "listening on");
             swarm.listen_on(listen_multiaddr)?;
         }
         vp2pn::config::Mode::Client { target } => {
-            info!(target: "vp2pn::tun", %target, "connecting to target");
+            info!(target: "vp2pn::swarm", %target, "connecting to target");
             swarm.dial(target)?;
         }
     }
 
     let mut remote_peer_id = None;
-    let mut buf = vec![0; 65536];
+
+    let (tun_reader_tx, mut tun_reader_rx) = tokio::sync::mpsc::channel(MAX_CHANNEL_BOUND);
+    let (tun_reader, join_tun_reader) = TunReader::spawn(tun.clone(), tun_reader_tx)?;
+
+    let (tun_writer_tx, tun_writer_rx) = tokio::sync::mpsc::channel(MAX_CHANNEL_BOUND);
+    let (tun_writer, join_tun_writer) = TunWriter::spawn(tun, tun_writer_rx)?;
+
     loop {
         tokio::select! {
-            res = tun.dev().recv(&mut buf) => {
-                match res {
-                    Ok(len) => {
-                        debug!(target: "vp2pn::tun", %len, "read bytes from tun");
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
 
-                        if let Some(remote_peer_id) = remote_peer_id {
-                            let _outbound_reqid = swarm.behaviour_mut().request_response.send_request(&remote_peer_id, buf[..len].to_vec());
-                        }
-                    }
-                    Err(e) => {
-                        error!(target: "vp2pn::tun", %e, "error recv from tun");
-                    }
+            res = tun_reader_rx.recv() => {
+                let Some(packet) = res else { break };
+                if let Some(remote_peer_id) = remote_peer_id {
+                    let _outbound_reqid = swarm.behaviour_mut().request_response.send_request(&remote_peer_id, packet);
                 }
             }
 
@@ -95,8 +99,8 @@ async fn main() -> Result<()> {
                         libp2p_request_response::Message::Request { request, channel, .. } => {
                             let req_len = request.len();
                             debug!(target: "vp2pn::swarm", %req_len, "forwarding len packet to tun");
-                            if let Err(e) = tun.dev().send(&request).await {
-                                error!(target: "vp2pn::swarm", %e, "error writing to tun");
+                            if let Err(e) = tun_writer_tx.try_send(request) {
+                                debug!(target: "vp2pn::swarm", %e, "tun writer full, dropping packet");
                             }
                             let _ = swarm
                                 .behaviour_mut()
@@ -112,9 +116,21 @@ async fn main() -> Result<()> {
                         info!(target: "vp2pn::swarm", %peer_id, "connection established");
                         remote_peer_id = Some(peer_id);
                     }
+                    SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                        info!(target: "vp2pn::swarm", %peer_id, "connection closed");
+                        remote_peer_id = None;
+                    }
                     _ => {}
                 }
             }
         }
     }
+
+    drop(tun_reader);
+    join_tun_reader.await?;
+
+    drop(tun_writer);
+    join_tun_writer.await?;
+
+    Ok(())
 }

@@ -3107,6 +3107,7 @@ dependencies = [
  "libp2p-request-response",
  "libp2p-swarm-derive",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tun-rs",
