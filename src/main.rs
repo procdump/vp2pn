@@ -2,6 +2,7 @@ use anyhow::Result;
 use libp2p::connection_limits::{self, ConnectionLimits};
 use libp2p::{futures::StreamExt, identity::Keypair, multiaddr::Protocol, swarm::SwarmEvent};
 use libp2p::{noise, relay, yamux};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
@@ -9,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use vp2pn::behaviour::{BytesCodec, Vp2pnBehaviour, Vp2pnBehaviourEvent};
 use vp2pn::config::{Config, Mode};
-use vp2pn::consts::MAX_CHANNEL_BOUND;
+use vp2pn::consts::{CONNECTION_EVENT_BUFFER, MAX_CHANNEL_BOUND, MAX_CONCURRENT_STREAMS};
 use vp2pn::tun::{TunDev, TunReader, TunWriter};
 
 #[tokio::main]
@@ -51,20 +52,35 @@ async fn main() -> Result<()> {
             libp2p::StreamProtocol::new("/reqres_bytes/1"),
             libp2p_request_response::ProtocolSupport::Full,
         )],
-        libp2p_request_response::Config::default(),
+        libp2p_request_response::Config::default()
+            .with_max_concurrent_streams(MAX_CONCURRENT_STREAMS),
     );
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
-        .with_relay_client(noise::Config::new, yamux::Config::default)?
+        // A relayed connection is noise + yamux inside a QUIC stream, so its
+        // substreams are yamux streams, not QUIC ones. Yamux caps them at 512
+        // by default and counts both directions against the same limit.
+        .with_relay_client(noise::Config::new, || {
+            let mut cfg = yamux::Config::default();
+            cfg.set_max_num_streams(MAX_CONCURRENT_STREAMS * 2);
+            cfg
+        })?
         .with_behaviour(|_key, relay_client| Vp2pnBehaviour {
             relay_client,
             request_response,
             ping: libp2p::ping::Behaviour::default(),
             limits: connection_limits::Behaviour::new(limits),
         })?
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
+        .with_swarm_config(|cfg| {
+            cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                .with_max_negotiating_inbound_streams(MAX_CONCURRENT_STREAMS)
+                .with_per_connection_event_buffer_size(CONNECTION_EVENT_BUFFER)
+                .with_notify_handler_buffer_size(
+                    NonZeroUsize::new(CONNECTION_EVENT_BUFFER).expect("non-zero"),
+                )
+        })
         .build();
 
     match config.params.mode {
