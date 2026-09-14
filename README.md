@@ -262,7 +262,9 @@ on the other side.
   changes on every restart.
 - No routing beyond the two tunnel endpoints; the `/24` is not advertised.
 - Each packet opens its own QUIC substream and is acknowledged with an empty
-  response. The ack is required by `request-response`, not by the tunnel.
+  response. The ack is required by `request-response`, not by the tunnel. This
+  is deliberate: the goal was to measure exactly that per-packet
+  `request-response` penalty.
 - No hole punching. Relayed traffic stays relayed; adding `dcutr` would let it
   upgrade to a direct connection.
 
