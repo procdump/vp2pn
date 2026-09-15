@@ -1,6 +1,8 @@
 pub const DEFAULT_LISTEN_MULTIADDR: &str = "/ip4/0.0.0.0/udp/9090/quic-v1";
+/// Default TUN MTU. `--mtu` also sets the largest tunneled packet the codec
+/// accepts: packets ride over a QUIC stream, so the ceiling is the IP maximum
+/// (65535, the `u16` range), not the underlay MTU.
 pub const DEFAULT_MTU: u16 = 1400;
-pub const MAX_FRAME_LEN: usize = 2048;
 pub const MAX_CHANNEL_BOUND: usize = 2048;
 
 /// Concurrent request-response substreams per connection, in each direction.

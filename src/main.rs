@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
 
     // Starting with req_res for the test but better be no responses.
     let request_response = libp2p_request_response::Behaviour::with_codec(
-        BytesCodec,
+        BytesCodec::new(usize::from(config.params.mtu)),
         [(
             libp2p::StreamProtocol::new("/reqres_bytes/1"),
             libp2p_request_response::ProtocolSupport::Full,

@@ -10,7 +10,8 @@ pub struct CommandLineParams {
     #[arg(short, long)]
     pub tun_prefix: Ipv4Net,
 
-    /// tun device MTU
+    /// tun device MTU; also the largest tunneled packet accepted from the peer,
+    /// so both sides must use the same value. Anything up to 65535 works.
     #[arg(long, default_value_t = DEFAULT_MTU)]
     pub mtu: u16,
 

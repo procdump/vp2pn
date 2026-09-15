@@ -4,12 +4,21 @@ use libp2p_request_response::{self, Codec};
 use libp2p_swarm_derive::NetworkBehaviour;
 use std::io;
 
-use crate::consts::MAX_FRAME_LEN;
+/// Length-prefixed byte frames. `max_frame_len` is the TUN MTU: a packet read
+/// from the device can never exceed it, so anything larger from the peer means
+/// the two sides run with different `--mtu` values.
+#[derive(Clone)]
+pub struct BytesCodec {
+    max_frame_len: usize,
+}
 
-#[derive(Clone, Default)]
-pub struct BytesCodec;
+impl BytesCodec {
+    pub fn new(max_frame_len: usize) -> Self {
+        Self { max_frame_len }
+    }
+}
 
-async fn read_frame<T>(io: &mut T) -> io::Result<Vec<u8>>
+async fn read_frame<T>(io: &mut T, max_frame_len: usize) -> io::Result<Vec<u8>>
 where
     T: AsyncRead + Unpin + Send,
 {
@@ -17,10 +26,10 @@ where
     io.read_exact(&mut len).await?;
     let len = u32::from_be_bytes(len) as usize;
 
-    if len > MAX_FRAME_LEN {
+    if len > max_frame_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("frame of {len} bytes exceeds limit of {MAX_FRAME_LEN}"),
+            format!("frame of {len} bytes exceeds limit of {max_frame_len}"),
         ));
     }
 
@@ -54,7 +63,7 @@ impl Codec for BytesCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        read_frame(io).await
+        read_frame(io, self.max_frame_len).await
     }
 
     async fn read_response<T>(

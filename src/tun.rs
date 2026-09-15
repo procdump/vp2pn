@@ -9,10 +9,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tun_rs::{AsyncDevice, DeviceBuilder};
 
-use crate::consts::MAX_FRAME_LEN;
-
 pub struct TunDev {
     dev: AsyncDevice,
+    mtu: u16,
 }
 
 impl TunDev {
@@ -22,11 +21,16 @@ impl TunDev {
             .mtu(mtu)
             .build_async()?;
 
-        Ok(Self { dev })
+        Ok(Self { dev, mtu })
     }
 
     pub fn dev(&self) -> &AsyncDevice {
         &self.dev
+    }
+
+    /// The device MTU, which is also the largest packet a single read returns.
+    pub fn mtu(&self) -> u16 {
+        self.mtu
     }
 }
 
@@ -40,7 +44,8 @@ impl TunReader {
         let join = tokio::spawn({
             let cancel = cancel_token.clone();
             async move {
-                let mut buf = [0u8; MAX_FRAME_LEN];
+                // Sized to the MTU; heap-allocated since it can be 64 KiB.
+                let mut buf = vec![0u8; usize::from(tun.mtu())];
                 loop {
                     tokio::select! {
                          _ = cancel.cancelled() => {

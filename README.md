@@ -42,7 +42,7 @@ Options:
 | Flag | Scope | Notes |
 |---|---|---|
 | `--tun-prefix` | global, required | Address *and* prefix, e.g. `20.0.0.1/24`. Both peers must share the subnet and differ in the host part. |
-| `--mtu` | global | Must stay below `MAX_FRAME_LEN` (2048). See [MTU](#mtu). |
+| `--mtu` | global | Packet size, up to 65535. Both peers must match. See [MTU](#mtu). |
 | `--listen-multiaddr` | `server` | Direct address or relay circuit. Default `/ip4/0.0.0.0/udp/9090/quic-v1`. |
 | `--target` | `client`, required | Full server multiaddr, including the `/p2p/<peer-id>` suffix. |
 
@@ -201,7 +201,18 @@ must support, so it never needs debugging. PPPoE links in particular cap at
 1492.
 
 Since cost is paid per *packet*, raising the MTU is a direct lever on bulk
-throughput — but `MAX_FRAME_LEN` must be raised to match.
+throughput. `--mtu` sets both the TUN packet size and the largest frame the
+codec accepts from the peer, and goes up to 65535, the IP maximum:
+
+```bash
+sudo ./target/release/vp2pn --tun-prefix 20.0.0.1/24 --mtu 65000 server
+```
+
+Both peers must use the same value. At 65000 the inner TCP sends ~65 KB
+segments, so one `request-response` round trip carries ~45x the bytes it does
+at 1400. Sweeping 1400, 9000 and 65000 shows how the per-request cost
+amortises with message size. The trade-off is loss recovery: a single dropped
+QUIC packet now stalls a 65 KB tunneled packet instead of a 1.4 KB one.
 
 ## Tuning
 
@@ -248,9 +259,9 @@ prefix. Confirm with `ifconfig | grep utun`. Both ends need addresses in the
 same subnet but different hosts; two peers sharing `20.0.0.1/24` appear to
 connect and then route nothing.
 
-**`InvalidData: frame of N bytes exceeds limit`** — `--mtu` was set above
-`MAX_FRAME_LEN`. The error surfaces on the *receiving* peer, so check the MTU
-on the other side.
+**`InvalidData: frame of N bytes exceeds limit`** — the peers run with
+different `--mtu` values. The limit is this side's MTU and the frame came from
+the other side, so the *sender* has the larger one.
 
 **Second client rejected** — intentional. The server sets
 `max_established_incoming(1)`, so one tunnel at a time.
